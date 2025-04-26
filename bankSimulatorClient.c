@@ -7,7 +7,7 @@
 #include <signal.h>
 
 typedef struct {
-    char client_fifo[32];
+    char clientName[32];
     char operation[32];
     char bank_id[32];
     int amount;
@@ -16,8 +16,9 @@ typedef struct {
 char *server_fifoname = NULL;
 
 void parse_line(char *line, Request *request, int client_count) {
-    sprintf(request->client_fifo, "Client%02d.fifo", client_count + 1);
-    if (mkfifo(request->client_fifo, 0666) == -1) {
+    sprintf(request->clientName, "Client_%02d", client_count + 1);
+    unlink(request->clientName);
+    if (mkfifo(request->clientName, 0666) == -1) {
         perror("FIFO create failed");
         exit(1);
     }
@@ -32,6 +33,7 @@ void parse_line(char *line, Request *request, int client_count) {
     request->amount = token ? atoi(token) : 0;
 }
 
+
 void send_request_to_server(Request *request, int client_id) {
     int server_fd = open(server_fifoname, O_WRONLY);
     if (server_fd < 0) {
@@ -40,7 +42,8 @@ void send_request_to_server(Request *request, int client_id) {
     }
 
     char buffer[128];
-    sprintf(buffer, "%s %s %s %d", request->client_fifo, request->bank_id, request->operation, request->amount);
+    printf( "%s %s %s %d", request->clientName, request->bank_id, request->operation, request->amount);
+    sprintf(buffer, "%s %s %s %d", request->clientName, request->bank_id, request->operation, request->amount);
     if (write(server_fd, buffer, strlen(buffer) + 1) < 0) {
         perror("Error writing to server FIFO");
         exit(1);
@@ -48,7 +51,7 @@ void send_request_to_server(Request *request, int client_id) {
 
     close(server_fd);
 
-    int client_fd = open(request->client_fifo, O_RDONLY);
+    int client_fd = open(request->clientName, O_RDONLY);
     if (client_fd >= 0) {
         char response[128];
         read(client_fd, response, sizeof(response));
@@ -58,8 +61,8 @@ void send_request_to_server(Request *request, int client_id) {
         fprintf(stderr, "Client%d: Something went wrong reading response.\n", client_id + 1);
     }
 
-    unlink(request->client_fifo);
-}
+    unlink(request->clientName);
+} 
 
 int main(int argc, char *argv[]) {
     if (argc != 3) {
@@ -74,9 +77,15 @@ int main(int argc, char *argv[]) {
     }
 
     server_fifoname = argv[2];
+    int server_fd = open(server_fifoname,O_WRONLY);
+    if(server_fd < 0){
+        perror("Failed to connect Server FIFO");
+        exit(1);
+    }
     printf("Reading %s...\n", argv[1]);
     printf("Creating clients...\n");
 
+    Request requests[20];
     char buffer[256];
     int bytes_read = 0, client_count = 0;
     char line[256];
@@ -85,22 +94,34 @@ int main(int argc, char *argv[]) {
     while ((bytes_read = read(fd, &buffer[index], 1)) > 0) {
         if (buffer[index] == '\n') {
             buffer[index] = '\0';
-            Request request;
-            parse_line(buffer, &request, client_count);
-            send_request_to_server(&request, client_count);
+            
+            parse_line(buffer, &requests[client_count], client_count);
+            //printf("%s %s %s %d", requests[index].clientName, requests[index].bank_id, requests[index].operation, requests[index].amount);
+            //send_request_to_server(&request, client_count);
             client_count++;
-            index = 0;""
+            index = 0;
         } else {
             index++;
         }
     }
-
     if (index > 0) {
         buffer[index] = '\0';
-        Request request;
-        parse_line(buffer, &request, client_count);
-        send_request_to_server(&request, client_count);
+        
+        parse_line(buffer, &requests[client_count], client_count);
+        //send_request_to_server(&request, client_count);
     }
+
+    printf("%d clients to connect... creating clients...\n",client_count);
+    printf("Connected to %s...\n",server_fifoname);
+
+    write(server_fd,&client_count,sizeof(int));
+
+    for(int i=0; i< client_count; i++){
+        //send_request_to_server(&requests[i], i);
+        write(server_fd,&requests[i],sizeof(Request));
+        printf("%s %s %s %d\n", requests[i].clientName, requests[i].bank_id, requests[i].operation, requests[i].amount);
+    }
+    
 
     close(fd);
     printf("Exiting...\n");
